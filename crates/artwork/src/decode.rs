@@ -89,13 +89,16 @@ impl DecodedImage {
     }
 }
 
+/// How far past the target the longest side of very wide or tall artwork may go.
+const MAX_ASPECT_SCALE: u64 = 2;
+
 pub fn decode_rgba(bytes: &[u8], render_size: u32) -> Result<RgbaImage, ArtworkError> {
     let image = decode_reader(
         ImageReader::new(Cursor::new(bytes))
             .with_guessed_format()
             .map_err(decode_error)?,
     )?;
-    rgba_image(scale_to_fit(
+    rgba_image(scale_to_cover(
         image,
         render_size.max(1),
         FilterType::Lanczos3,
@@ -156,7 +159,7 @@ fn decoded_image(
     Ok(DecodedImage {
         key,
         cache_path: Arc::new(path),
-        pixels: rgba_image(scale_to_fit(
+        pixels: rgba_image(scale_to_cover(
             image,
             render_size.max(1),
             FilterType::Lanczos3,
@@ -173,7 +176,7 @@ pub(crate) fn normalize_for_cache(
             .with_guessed_format()
             .map_err(decode_error)?,
     )?;
-    let image = scale_to_fit(image, size.max(1), FilterType::Triangle)?;
+    let image = scale_to_cover(image, size.max(1), FilterType::Triangle)?;
     let bytes = encode_png(&image)?;
     Ok(NormalizedImage { image, bytes })
 }
@@ -193,7 +196,7 @@ where
     }
 }
 
-fn scale_to_fit(
+fn scale_to_cover(
     image: DynamicImage,
     target: u32,
     filter: FilterType,
@@ -205,12 +208,23 @@ fn scale_to_fit(
             "artwork dimensions were empty".to_string(),
         ));
     }
-    let longest = width.max(height);
-    if longest <= target {
+    // Covers are cropped to fill their (mostly square) frames, so the shortest
+    // side must reach the target; scaling the longest side to it leaves wide
+    // artwork upscaled and blurry. The longest side stays within
+    // MAX_ASPECT_SCALE times the target so very wide images stay small.
+    let shortest = u64::from(width.min(height));
+    let longest = u64::from(width.max(height));
+    let target = u64::from(target);
+    let (numerator, denominator) = if longest > shortest * MAX_ASPECT_SCALE {
+        (target * MAX_ASPECT_SCALE, longest)
+    } else {
+        (target, shortest)
+    };
+    if numerator >= denominator {
         return Ok(image);
     }
-    let scaled_width = (u64::from(width) * u64::from(target) / u64::from(longest)).max(1);
-    let scaled_height = (u64::from(height) * u64::from(target) / u64::from(longest)).max(1);
+    let scaled_width = (u64::from(width) * numerator / denominator).max(1);
+    let scaled_height = (u64::from(height) * numerator / denominator).max(1);
     let scaled_width = u32::try_from(scaled_width)
         .map_err(|_| ArtworkError::Decode("scaled artwork width was invalid".to_string()))?;
     let scaled_height = u32::try_from(scaled_height)
@@ -286,13 +300,52 @@ mod tests {
         encode_png(&image).expect("encode fixture")
     }
 
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            width,
+            height,
+            image::Rgb([20, 40, 60]),
+        ));
+        encode_png(&image).expect("encode fixture")
+    }
+
     #[test]
     fn normalization_preserves_aspect_ratio_and_emits_png() {
         let normalized = normalize_for_cache(wide_png(), 100).expect("normalize image");
         assert_eq!(&normalized.bytes()[..8], b"\x89PNG\r\n\x1a\n");
         let decoded = decode_rgba(normalized.bytes(), 100).expect("decode normalized image");
-        assert_eq!((decoded.width(), decoded.height()), (100, 50));
-        assert_eq!(decoded.row_stride(), 400);
+        assert_eq!((decoded.width(), decoded.height()), (200, 100));
+        assert_eq!(decoded.row_stride(), 800);
+    }
+
+    #[test]
+    fn wide_artwork_keeps_its_shortest_side_at_the_target() {
+        // A 16:9 video thumbnail cropped into a square cover
+        let decoded = decode_rgba(&png(1280, 720), 256).expect("decode wide image");
+        assert_eq!((decoded.width(), decoded.height()), (455, 256));
+        let normalized = normalize_for_cache(png(720, 1280), 96).expect("normalize tall image");
+        assert_eq!(
+            (normalized.image.width(), normalized.image.height()),
+            (96, 170)
+        );
+    }
+
+    #[test]
+    fn square_artwork_scales_to_the_target() {
+        let decoded = decode_rgba(&png(1000, 1000), 256).expect("decode square image");
+        assert_eq!((decoded.width(), decoded.height()), (256, 256));
+    }
+
+    #[test]
+    fn small_artwork_is_not_upscaled() {
+        let decoded = decode_rgba(&png(400, 200), 256).expect("decode small image");
+        assert_eq!((decoded.width(), decoded.height()), (400, 200));
+    }
+
+    #[test]
+    fn very_wide_artwork_is_capped() {
+        let decoded = decode_rgba(&png(3000, 300), 100).expect("decode banner");
+        assert_eq!((decoded.width(), decoded.height()), (200, 20));
     }
 
     #[test]

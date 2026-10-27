@@ -11,7 +11,7 @@ use sources::SourceId;
 use crate::selection::Candidate;
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-const CACHE_LAYOUT: &str = "v1";
+const CACHE_LAYOUT: &str = "v2";
 const MAX_EXTERNAL_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTERNAL_CACHE_FILES: usize = 50_000;
 const PRUNE_TARGET_PERCENT: u64 = 90;

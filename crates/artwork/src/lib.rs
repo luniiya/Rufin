@@ -426,7 +426,7 @@ mod preparation_tests {
         )
         .unwrap();
         let binding = ArtworkBinding::opaque(&encoded);
-        let cache = cache::FilesystemCache::new(root.join("v1")).unwrap();
+        let cache = cache::FilesystemCache::new(root.join("v2")).unwrap();
         let mut png = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             32,
