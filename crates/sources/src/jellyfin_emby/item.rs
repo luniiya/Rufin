@@ -419,8 +419,10 @@ pub(super) fn album_from_item(server: ServerKind, item: Value) -> Option<Album> 
 
 pub(super) fn track_from_item(server: ServerKind, item: Value) -> Option<Track> {
     let item_id = id(&item["Id"])?;
-    let image_ref = album_image_ref(server, &item)
-        .or_else(|| primary_image_ref(server, "track", &item_id, &item["ImageTags"]))
+    // The track's own cover first: the library swaps in the album cover unless
+    // distinct track covers are enabled, which needs the track's image to choose from
+    let image_ref = primary_image_ref(server, "track", &item_id, &item["ImageTags"])
+        .or_else(|| album_image_ref(server, &item))
         .or_else(|| alternate_primary_image_ref(server, &item))
         .or_else(|| backdrop_image_ref(server, &item));
     let artist_credits = artist_credits_from_pairs(server, &item["ArtistItems"]);
@@ -780,6 +782,17 @@ mod tests {
                     .item_id,
                 server.object_id("album", "1")
             );
+            assert_eq!(
+                track_from_item(server, item)
+                    .unwrap()
+                    .image_ref
+                    .unwrap()
+                    .item_id,
+                server.object_id("track", "1")
+            );
+            // Without a cover of its own, a track falls back to its album's
+            let item =
+                json!({"Id":"1", "ImageTags":{}, "AlbumId":"3", "AlbumPrimaryImageTag":"album"});
             assert_eq!(
                 track_from_item(server, item)
                     .unwrap()
